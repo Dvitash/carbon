@@ -43,7 +43,7 @@ const DATA_ARTIFACT: &str = "state.carbon";
 const TRANSACTION_VERSION: u32 = 1;
 // This is the cross-release compiled-output compatibility boundary. Bump it
 // whenever Carbon changes the meaning or binary encoding of a build output.
-const BUILD_CACHE_SCHEMA: u32 = 4;
+const BUILD_CACHE_SCHEMA: u32 = 5;
 
 #[derive(Clone, Debug)]
 struct Project {

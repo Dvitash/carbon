@@ -69,6 +69,9 @@ pub(crate) fn normalize_wire_attributes(class: &str, properties: &mut UstrMap<Va
 	normalize_wire_exact_values(class, properties)
 }
 
+const VOXEL_TECHNOLOGY: i32 = 1;
+const COMPATIBILITY_TECHNOLOGY: i32 = 2;
+
 pub(crate) fn adapt_lighting_output_properties(class: &str, properties: &mut UstrMap<Variant>) -> Result<()> {
 	if class != "Lighting" {
 		return Ok(());
@@ -92,9 +95,22 @@ pub(crate) fn adapt_lighting_output_properties(class: &str, properties: &mut Ust
 		*original >= 0,
 		"Lighting.RBX_OriginalTechnologyOnFileLoad cannot be negative"
 	);
+	// Roblox sunset Compatibility lighting: Studio migrates it to Voxel on every
+	// load and marks the place RBX_LightingCompatibilityMigrated. Writing
+	// Compatibility back would only make Studio migrate (and prompt) again, so a
+	// migrated place builds as Voxel.
+	let technology = if *original == COMPATIBILITY_TECHNOLOGY
+		&& matches!(
+			attributes.get("RBX_LightingCompatibilityMigrated"),
+			Some(Variant::Bool(true))
+		) {
+		VOXEL_TECHNOLOGY
+	} else {
+		*original
+	};
 	properties.insert(
 		Ustr::from("Technology"),
-		Variant::Enum(Enum::from_u32(*original as u32)),
+		Variant::Enum(Enum::from_u32(technology as u32)),
 	);
 	Ok(())
 }
@@ -540,5 +556,57 @@ impl serde::Serialize for WireVariant<'_> {
 			}
 			value => serde::Serialize::serialize(value, serializer),
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn lighting(technology: u32, attributes: Attributes) -> UstrMap<Variant> {
+		UstrMap::from_iter([
+			(Ustr::from("Technology"), Variant::Enum(Enum::from_u32(technology))),
+			(Ustr::from("Attributes"), Variant::Attributes(attributes)),
+		])
+	}
+
+	fn technology(properties: &UstrMap<Variant>) -> u32 {
+		match properties.get(&Ustr::from("Technology")) {
+			Some(Variant::Enum(value)) => value.to_u32(),
+			other => panic!("unexpected Technology {other:?}"),
+		}
+	}
+
+	#[test]
+	fn restores_technology_studio_changed_on_load() {
+		let attributes = Attributes::new()
+			.with("RBX_LightingTechnologyUnifiedMigration", Variant::Bool(true))
+			.with("RBX_OriginalTechnologyOnFileLoad", Variant::Int32(3));
+		let mut properties = lighting(1, attributes);
+		adapt_lighting_output_properties("Lighting", &mut properties).unwrap();
+		assert_eq!(technology(&properties), 3);
+	}
+
+	#[test]
+	fn builds_voxel_after_compatibility_sunset_migration() {
+		for stored in [1, 2] {
+			let attributes = Attributes::new()
+				.with("RBX_LightingTechnologyUnifiedMigration", Variant::Bool(true))
+				.with("RBX_OriginalTechnologyOnFileLoad", Variant::Int32(2))
+				.with("RBX_LightingCompatibilityMigrated", Variant::Bool(true));
+			let mut properties = lighting(stored, attributes);
+			adapt_lighting_output_properties("Lighting", &mut properties).unwrap();
+			assert_eq!(technology(&properties), 1);
+		}
+	}
+
+	#[test]
+	fn restores_compatibility_without_completed_migration() {
+		let attributes = Attributes::new()
+			.with("RBX_LightingTechnologyUnifiedMigration", Variant::Bool(true))
+			.with("RBX_OriginalTechnologyOnFileLoad", Variant::Int32(2));
+		let mut properties = lighting(1, attributes);
+		adapt_lighting_output_properties("Lighting", &mut properties).unwrap();
+		assert_eq!(technology(&properties), 2);
 	}
 }
